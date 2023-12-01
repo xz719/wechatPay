@@ -1,4 +1,4 @@
-# wechatPay
+# wechatPay --- JSAPI
 微信支付相关
 
 ## 1. 微信授权模块
