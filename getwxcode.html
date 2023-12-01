@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>微信授权</title>
+  </head>
+
+  <body>
+    <script>
+      const wechatAuth = {
+        urlParams: {},
+        appendParamsToUrl: function (url, params) {
+          if (params) {
+            // 传入的url中可能携带有 wechat_redirect 标识，这里先将其拿出来
+            let baseWithSearch =
+              url.split("#")[1] === "wechat_redirect" ? url.split("#")[0] : url;
+            let hash = url.split("#")[1];
+            // 处理传入的需要向url上添加的参数对象
+            for (let key in params) {
+              // 拿到参数值
+              let attrValue = params[key];
+              if (attrValue !== undefined) {
+                // 构建键值对
+                let newParam = key + "=" + attrValue;
+                // 检查此时的 baseWithSearch 中是否已经添加了参数
+                if (baseWithSearch.indexOf("?") > 0) {
+                  // 若添加了参数，则后续的参数需要用 '&' 连接
+                } else {
+                  // 若还没有添加参数，则将当前的参数作为第一个参数通过 '?' 连接到 baseWithSearch 上
+                  baseWithSearch += "?" + newParam;
+                  let hasOldParamReg = new RegExp(
+                    "^" + key + "=[-%.!~*'\(\)\\w]*",
+                    "g"
+                  );
+                  // 检查现在的 baseWithSearch 上是不是已经有与当前要添加的参数同名的旧参数
+                  if (hasOldParamReg.test(baseWithSearch)) {
+                    // 若有，则用新参数替换
+                    baseWithSearch = baseWithSearch.replace(
+                      hasOldParamReg,
+                      newParam
+                    );
+                  } else {
+                    // 没有，则直接用 '&' 连接上去
+                    baseWithSearch += "&" + newParam;
+                  }
+                }
+              }
+            }
+            // 将前面取出的标识加回去
+            if (hash === "wechat_redirect") {
+              url = baseWithSearch + "#" + hash;
+            } else {
+              url = baseWithSearch;
+            }
+          }
+          return url;
+        },
+        getUrlParams: function () {
+          // 先用 location.search 获取url中的参数字符串，例如：'?a=xx&b=xx&c=cc&...'
+          // 并用 substring 处理掉最前面的'?'
+          let paramStr = loction.search.substring(1);
+          let keyValueList = paramStr.split("&"); // 将参数字符串根据&分割得到一个键值对数组
+          // 处理参数数组中的各键值对
+          for (let i = 0; i < keyValueList.length; i++) {
+            // 找到键值对中'='的位置
+            let equalIndex = keyValueList[i].indexOf("=");
+            if (equalIndex === -1) {
+              // 找不到等号位置时，直接进行下一轮循环，去处理下一对键值对
+              continue;
+            }
+            // 找到等号后，只需要将键值对转换为对象属性即可
+            // 等号前的为key
+            let key = keyValueList[i].substring(0, equalIndex);
+            // 等号后的为value，但需要注意，我们从其它页面中携带参数跳转进来时，参数是经过了 urlencode 处理的！
+            let encodedValue = keyValueList[i].substring(equalIndex + 1);
+            let decodedValue = decodeURIComponent(encodedValue);
+            wechatAuth.urlParams[key] = decodedValue;
+          }
+        },
+        authorize: function () {
+          // 首先拿到我们前面从路径中取出的参数
+          const code = wechatAuth.urlParams["code"];
+          // appId 是其它页面在微信浏览器中的唯一应用编号，是必须的！
+          const appId = wechatAuth.urlParams["appid"];
+          const scope = wechatAuth.urlParams["scope"];
+          const state = wechatAuth.urlParams["state"];
+          /*
+             	params 是我们从其它页面中跳转进入该模块时携带的各种参数
+             	由于无法保证各页面跳转时携带的参数都是统一的，所以将这些参数统统放在 params 中。
+             	同时，其它页面跳转进来时，之所以要携带这些参数，往往是为了从该模块跳转回去时使用
+             	所以我们也不需要进行处理，只需要在跳转回去时给它携带上即可
+             */
+          const params = wechatAuth.urlParams["params"];
+          // 准备好跳转的 toUrl、baseUrl 以及重定向所需的 redirect_uri
+          let baseUrl;
+          let redirectUri;
+          let toUrl;
+          // 此时是否拿到了code
+          if (!code) {
+            // 情况1 --- 没有拿到code，需要跳转微信授权页，获取code
+            // 设置 baseUrl 为微信开发平台授权链接
+            baseUrl =
+              "https://open.weixin.qq.com/connect/oauth2/authorize#wechat_redirect";
+            // 设置目标链接
+            toUrl = wechatAuth.appendParams(baseUrl, {
+              appid: appId, // appId
+              // 由于现在是去微信平台授权，所以将重定向地址设置为当前模块的域名即可，完成授权后才是跳转其它页面
+              redirect_uri: encodeURIComponent(location.href),
+              response_type: "code",
+              // 这些原来进入模块时携带的参数也要带上，不然等会儿跳转回来的时候参数就丢失了
+              scope: scope,
+              state: state,
+              params: params,
+            });
+          } else {
+            // 情况2 --- 已经拿到了code，需要跳转回其它页面
+            // 此时需要将 baseUrl 置为我们进入该模块的页面链接，即我们在params中携带的 origin 字段
+            const redirectParams = JSON.parse(params);
+            const origin = redirectParams.origin;
+            // 将 redirectParams 中的 origin 字段删掉
+            delete redirectParams.origin;
+            // 设置跳转链接，此时用我们的origin作为baseUrl
+            toUrl = wechatAuth.appendParams(origin, {
+              // 带上授权得到的授权码
+              code: code,
+              // 从其它页面进入该模块时的参数也携带上，不要丢弃了
+              state: state,
+              ...redirectParams,
+            });
+          }
+          // 跳转
+          location.href = toUrl;
+        },
+      };
+      wechatAuth.getUrlParams();
+      wechatAuth.authorize();
+    </script>
+  </body>
+</html>
