@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>微信支付</title>
+    <!-- 引入axios用于发送请求 -->
+    <script src="https://web-common-resource.stem86.com/axios/axios-1.4.0.min.js"></script>
+    <!-- 引入微信依赖 -->
+    <script src="https://web-common-resource.stem86.com/wechat/weixin-1.6.0.min.js"></script>
+    <script>
+      // 初始化微信模块
+      function initWxConfig() {
+        // 请求接口获取平台微信配置
+        axios
+          .post(
+            "https://api.xxx.com",
+            {
+              func: "wxConfig",
+              url: window.location.href.split("?")[0], // 这里将模块的域名传递过去，用于校验
+            },
+            {
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          )
+          .then((response) => {
+            // 调取微信API添加微信配置信息，这些信息都是由后端调取微信API获得的
+            wx.config({
+              debug: false, // 是否开启调试模式
+              appId: response.data.result.appId, // 必填，唯一应用标识
+              signature: response.data.result.signature, // 必填，签名，即微信的认证信息
+              timestamp: response.data.result.timestamp, // 必填，生成签名的时间戳
+              nonceStr: response.data.result.nonceStr, // 必填，生成签名的随机串
+              jsApiList: [
+                // 需要调用的JS接口列表
+                "chooseWXPay",
+              ],
+            });
+          })
+          .catch((err) => {
+            console.log(JSON.stringify(err));
+          });
+      }
+
+      const postParam = {}
+
+      const redirectParam = {}
+
+      // 从url中获取指定参数
+      function getUrlParams(paramKey) {
+        let paramStr = location.href.slice("?")[1];
+        let searchParams = new URLSearchParams(paramStr);
+        // 这里通过 entries() 方法获取 searchParams 对象的迭代器
+        // 然后通过 fromEntries() 方法，将 searchParams 这一键值对列表转换为对象
+        let result = Object.fromEntries(searchParams.entries());
+        return result[paramKey];
+      }
+
+      // 向url中添加参数
+      function addParams2Url(url, params) {
+        // 取出baseUrl
+        var baseUrl = url.split("?")[0];
+        // 取出后续的参数部分
+        var searchParams = new URLSearchParams(url.split("?")[1]);
+        // 向 searchParams 键值对列表中添加参数
+        for (var key in params) {
+          searchParams.set(key, params[key]);
+        }
+        return baseUrl + "?" + searchParams.toString();
+      }
+
+      // 通过 userTicket 换取用户token
+      function getTokenByUserTicket(userTicket) {
+        axios
+          .post(
+            "https://api.xxx.com",
+            {
+              func: "getTokenByUserTicket",
+              userTicket: userTicket,
+            },
+            {
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          )
+          .then(function (response) {
+            const token = response.data.result.token;
+            return token;
+          })
+          .catch(function (error) {
+            console.log(JSON.stringify(error));
+          });
+      }
+
+      // 订单支付状态，默认为2 --- 未支付
+      let payStatus = 2;
+
+      // 调取后端接口下单
+      function placeOrder(token, postParam) {
+        axios
+          .post(
+            "https://api.xxx.com",
+            {
+              func: "placeOrder",
+              ...postParam,
+              token: token,
+            },
+            {
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          )
+          .then((response) => {
+            if (response.data.code == 0) {
+              // 下单成功，进行支付
+              payByWeChat(response.data);
+            } else {
+              // 下单失败，报错，然后跳转回其它页面
+              alert(response.data.message);
+              payEndDoRedirect();
+            }
+          })
+          .catch(function (error) {
+            console.log(JSON.stringify(error));
+          });
+      }
+
+      // 微信支付
+      function payByWeChat({result}) {
+        wx.chooseWXPay({
+          // 支付签名时间戳，注意微信JS SDK中的所有使用timestamp字段均为小写。但最新版的支付后台生成签名使用的timeStamp字段名需大写其中的S字符
+          timestamp: result.timeStamp,
+          // 支付签名随机串，不长于 32 位
+          nonceStr: result.nonceStr,
+          // 统一支付接口返回的prepay_id参数值，提交格式如：prepay_id=\*\*\*）
+          package: result.package,
+          // 签名方式，默认为'SHA1'，使用新版支付需传入'MD5'
+          signType: result.signType,
+          // 支付签名
+          paySign: result.paySign,
+          // 支付成功后的回调函数
+          success: function (res) {
+            // res.errMsg === 'chooseWXPay:ok'方式判断前端返回, 微信团队郑重提示：
+            // res.errMsg将在用户支付成功后返回ok，但并不保证它绝对可靠，切记。
+            if (res.errMsg === "chooseWXPay:ok") {
+              alert("支付成功");
+              // 支付成功后，将支付状态置为1，并进行后续跳转
+              payStatus = 1;
+              payEndDoRedirect();
+            }
+          },
+          // 接口调用完成时执行的回调函数，无论成功或失败都会执行
+          complete: function (res) {
+            if (res.errMsg == "chooseWXPay:cancel") {
+              alert("用户支付失败");
+            }
+            // 完成后，进行后续跳转
+            payEndDoRedirect();
+            /**
+             * iOS和Android支付成功点击“完成”后都会进入success和complete函数，都返回'chooseWXPay:ok'
+             * 但也有人说Android支付成功不进入success函数，
+             * 原因是【iOS和Android返回数据不同。支付成功后Android返回 {"errMsg":"getBrandWCPayRequest:ok"}，iOS返回{"err_Info":"success","errMsg":"chooseWXPay:ok"}，故Android找不到success方法，导致失败】
+             * */
+          },
+          // 支付取消回调函数
+          cancel: function (res) {
+            alert("用户取消支付");
+            // 支付取消后，进行后续跳转
+            payEndDoRedirect();
+          },
+          // 支付失败回调函数
+          fail: function (res) {
+            alert("接口调用失败");
+            // 失败后，进行后续跳转
+            payEndDoRedirect();
+          },
+        });
+      }
+
+      // 完成支付后进行跳转
+      function payEndDoRedirect() {
+        // 从重定向参数中取得一开始跳转到该模块的页面的域名
+        const origin = redirectParam.origin;
+        delete redirectParam.origin;
+        // 向重定向路径中添加订单支付状态 payStatus，后续支付页面可以拿该字段进行进一步的操作
+        redirectParam.payStatus = payStatus;
+        // 将这些参数添加到要跳转的域名后面
+        const originUrl = addUrlParams(origin, redirectParam);
+        window.location.href = originUrl;
+      }
+
+      window.onload = function () {
+        // 1. 初始化微信模块
+        initWxConfig();
+        // 2. 从路径中取出参数
+        let params = getUrlParams("params"); // 进入该模块时携带的参数
+        // 取出调取接口时需要传递的参数
+        postParam = JSON.parse(params).postParam;
+        // 取出重定向时需要的参数
+        redirectParam = JSON.parse(params).redirectParam;
+
+        /*
+          postParam 中的 userTicket 信息，换取用户token
+          
+          --- 为什么？
+
+            因为平台各端内部都是使用token来标识当前使用用户，但当各端互通时，不可能将token通过url进行传递。
+            所以，在某一端需要跳转至另一个端时，需要将token通过平台内部的处理变为ticket，然后通过url跳转并携带ticket。
+            当另一端接收到ticket后，再使用平台内部的相同逻辑将ticket兑换为token，这样不同端之间就能识别到同一个用户了
+
+            这里换取token就是为了达成这一目的
+
+        */
+        const token = getTokenByUserTicket(postParam.userTicket);
+
+        // 下单
+        placeOrder(token, postParam);
+      };
+    </script>
+  </head>
+  <body></body>
+</html>
